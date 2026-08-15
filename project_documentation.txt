@@ -1,0 +1,1180 @@
+======================================================================
+             DRIVER DROWSINESS DETECTION SYSTEM
+                    PROJECT DOCUMENTATION
+======================================================================
+
+PROJECT PURPOSE
+---------------
+This project is a camera-based Driver Drowsiness Detection System.
+
+Its purpose is to monitor a driver's face using a webcam and detect
+possible signs of drowsiness using:
+
+1. Eye closure / EAR
+2. Yawning / MAR
+3. Head tilt / head roll angle
+4. Time-based persistence of these conditions
+5. Audible alarm
+
+The project is being built modularly. Each feature is implemented and
+tested separately before the modules are integrated into main.py.
+
+
+======================================================================
+1. CURRENT PROJECT ENVIRONMENT
+======================================================================
+
+Project folder:
+D:\driverDrowsiness
+
+Python:
+3.13.15
+
+Virtual environment:
+venv
+
+Important activation command in PowerShell:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+
+Installed/tested packages:
+- NumPy
+- OpenCV
+- MediaPipe
+- pygame was originally considered for audio, but the current alarm.py
+  uses Windows winsound instead.
+
+Environment verification previously passed:
+[PASS] NumPy
+[PASS] OpenCV
+[PASS] MediaPipe
+
+The project uses MediaPipe's newer Face Landmarker interface. The old
+MediaPipe API using:
+
+    mp.solutions.face_mesh
+
+is NOT used.
+
+The project currently uses:
+    face_landmarker.task
+
+as the MediaPipe face landmark model.
+
+
+======================================================================
+2. FILE STRUCTURE AND PURPOSE
+======================================================================
+
+camera.py
+---------
+Purpose:
+Controls webcam access.
+
+Main responsibilities:
+- Open the camera.
+- Read frames.
+- Release the camera safely.
+
+Basic flow:
+Camera.open()
+Camera.read()
+Camera.release()
+
+
+verify_Environment.py
+--------------------
+Purpose:
+Checks that Python and the required computer-vision packages are
+installed correctly.
+
+It verifies:
+- Python
+- NumPy
+- OpenCV
+- MediaPipe
+
+This file is mainly an environment/setup verification tool.
+
+
+face_detector.py
+----------------
+Purpose:
+Earlier face/landmark detection module.
+
+It was used during the early development and testing of facial
+landmarks.
+
+IMPORTANT:
+The project later moved to the newer MediaPipe Face Landmarker API.
+The currently working EyeDetector uses the newer API instead of the
+old mp.solutions.face_mesh interface.
+
+Therefore, face_detector.py should be considered an earlier/legacy
+development module unless the current main system explicitly imports it.
+
+
+face_landmarker.task
+--------------------
+Purpose:
+MediaPipe model file.
+
+It contains the face landmark model used by the newer MediaPipe
+Face Landmarker implementation.
+
+This file is required by the current landmark detection system.
+
+DO NOT delete it.
+
+
+eye_detector.py
+---------------
+Purpose:
+Detects facial landmarks and extracts the landmarks required by the
+eye-related features.
+
+Important architecture detail:
+The current EyeDetector provides a detect(frame) method.
+
+Correct current usage:
+
+    results = eye_detector.detect(frame)
+
+NOT:
+
+    eye_detector.face_detector.detect(frame)
+
+The latter caused an integration error earlier.
+
+EyeDetector is also responsible for drawing eye landmarks on the
+camera frame.
+
+
+ear.py
+-------
+Purpose:
+Calculates Eye Aspect Ratio (EAR).
+
+EAR is used to determine whether the eyes are open or closed.
+
+The eye landmark points are used to calculate vertical and horizontal
+distances between specific eye points.
+
+
+calibration.py
+--------------
+Purpose:
+Personalizes the eye-closure threshold for the current driver.
+
+Calibration process:
+1. Camera opens.
+2. Face landmarks are detected.
+3. Eye landmarks are extracted.
+4. EAR is calculated for both eyes.
+5. Average EAR is collected over approximately 5 seconds.
+6. Median EAR becomes the natural open-eye baseline.
+7. Standard deviation is calculated.
+8. A personalized eye-closure threshold is calculated.
+
+Current threshold formula:
+
+    threshold = baseline_EAR * 0.70
+
+Example calibration obtained during development:
+
+    Measurements collected : 136
+    Open-eye baseline EAR  : 0.335
+    EAR standard deviation : 0.016
+    Eye-closure threshold  : 0.234
+
+Another complete-system calibration produced:
+
+    Open-eye baseline EAR  : 0.319
+    EAR standard deviation : 0.014
+    Eye-closure threshold  : 0.223
+
+The exact values change between calibrations because the system
+personalizes the threshold using live camera measurements.
+
+IMPORTANT:
+Calibration should be performed with the driver's eyes naturally open
+and the face looking approximately straight at the camera.
+
+
+drowsiness_detector.py
+----------------------
+Purpose:
+Combines the individual detection features.
+
+It handles:
+- Eye closure
+- Yawning
+- Head tilt
+- Drowsiness events
+- Detection timing
+
+It acts as an intermediate decision/detection layer between the
+feature detectors and the alarm.
+
+
+yawn_detector.py
+----------------
+Purpose:
+Detects yawning using Mouth Aspect Ratio (MAR).
+
+The mouth landmarks are used to calculate how open the mouth is.
+
+A yawn is not triggered from one frame alone. The mouth must remain
+above the configured MAR threshold for the required duration.
+
+A previously tested configuration used approximately:
+
+    MAR threshold = 0.42
+    Yawn duration = 1.0 second
+
+These values are prototype values and can be tuned after testing.
+
+
+head_pose.py
+------------
+Purpose:
+Detects left/right head tilt using the relative positions of the eyes.
+
+The current module calculates the angle of the line joining the eye
+centers.
+
+IMPORTANT PROBLEM FOUND:
+The original implementation could report approximately 180 degrees
+when the head was actually straight. This happened because atan2()
+can represent a horizontal line as either approximately 0 degrees
+or approximately 180 degrees depending on vector orientation.
+
+The corrected approach normalizes the angle so:
+
+    Straight head -> approximately 0 degrees
+
+The current normalization logic is conceptually:
+
+    if angle > 90:
+        angle -= 180
+
+    elif angle < -90:
+        angle += 180
+
+This converts the angle into approximately:
+
+    -90 <= angle <= +90
+
+A straight head should normally fluctuate around 0 degrees rather than
+180 degrees.
+
+Current prototype configuration:
+
+    Head tilt threshold = 15 degrees
+    Head tilt duration  = 1.5 seconds
+
+The duration prevents brief movements from immediately being classified
+as a sustained head-tilt event.
+
+
+alarm.py
+--------
+Purpose:
+Controls the audible warning.
+
+Current implementation uses:
+
+    threading
+    winsound
+
+The alarm runs in a background thread so that the camera/detection
+loop can continue running.
+
+IMPORTANT METHOD NAMES:
+
+Start alarm:
+    alarm.start()
+
+Stop alarm:
+    alarm.stop()
+
+There is NO:
+    alarm.trigger()
+
+An earlier integration error occurred because main.py called:
+
+    alarm.trigger()
+
+The correct method is:
+
+    alarm.start()
+
+
+main.py
+-------
+Purpose:
+Main integration program.
+
+It combines:
+- Calibration
+- Camera
+- Eye detection
+- EAR
+- Yawning/MAR
+- Head pose
+- Drowsiness detection
+- Alarm
+- Session summary
+
+Typical workflow:
+
+    Start
+      |
+      v
+    Calibrate eyes
+      |
+      v
+    Obtain personalized EAR threshold
+      |
+      v
+    Start detection
+      |
+      +--------> Eye closure / EAR
+      |
+      +--------> Yawning / MAR
+      |
+      +--------> Head tilt
+      |
+      v
+    Drowsiness/event logic
+      |
+      v
+    Alarm if required
+      |
+      v
+    Session summary
+      |
+      v
+    Safe shutdown
+
+
+theme.py
+--------
+Purpose:
+Centralized subtle color theme for the OpenCV camera window.
+
+This file was created but the visual theme change was intentionally
+postponed.
+
+The intended theme is:
+- Dark/subtle appearance
+- Soft gray-blue landmarks
+- Muted green for normal state
+- Muted amber for warnings
+- Muted red for drowsiness
+- Soft gray/blue text
+
+The color theme should be applied later without changing detection
+logic.
+
+
+PROJECT_DOCUMENTATION.txt
+-------------------------
+This file.
+
+Purpose:
+Project reference containing architecture, formulas, workflow,
+configuration, testing information, and important development notes.
+
+
+======================================================================
+3. IMPORTANT FORMULAS
+======================================================================
+
+A. EYE ASPECT RATIO (EAR)
+-------------------------
+
+EAR is used to estimate how open an eye is.
+
+For six eye landmarks:
+
+    EAR = [ ||p2-p6|| + ||p3-p5|| ]
+          ---------------------------
+                 2 * ||p1-p4||
+
+Where:
+
+p1 and p4 are the left/right horizontal eye points.
+
+p2, p3, p5 and p6 are the vertical eye points.
+
+Equivalent form:
+
+    EAR = (vertical_distance_1 + vertical_distance_2)
+          --------------------------------------------
+                  2 * horizontal_distance
+
+Interpretation:
+
+- Open eye -> relatively larger EAR
+- Closed eye -> much smaller EAR
+
+The exact EAR value depends on camera position, face geometry,
+landmark quality, and individual driver characteristics.
+
+That is why the project performs personalized calibration.
+
+
+B. MOUTH ASPECT RATIO (MAR)
+---------------------------
+
+MAR is used to estimate mouth opening.
+
+The general concept is similar to EAR:
+
+    MAR = sum of vertical mouth distances
+          --------------------------------
+             horizontal mouth distance
+
+A larger MAR indicates a more open mouth.
+
+A sustained large MAR can indicate yawning.
+
+Prototype configuration used:
+
+    MAR threshold = 0.42
+    Duration      = 1.0 second
+
+These are adjustable experimental parameters.
+
+
+C. HEAD ROLL / TILT ANGLE
+-------------------------
+
+The eye centers are first calculated.
+
+Let:
+
+    Left eye center  = (Lx, Ly)
+    Right eye center = (Rx, Ry)
+
+Then:
+
+    dx = Rx - Lx
+    dy = Ry - Ly
+
+The raw eye-line angle is:
+
+    angle = atan2(dy, dx) * 180 / pi
+
+The raw result can be near 180 degrees even when the head is
+actually straight.
+
+Therefore, normalize it:
+
+    if angle > 90:
+        angle = angle - 180
+
+    elif angle < -90:
+        angle = angle + 180
+
+Result:
+
+    approximately -90 degrees <= angle <= +90 degrees
+
+Straight head:
+    approximately 0 degrees
+
+Tilted left/right:
+    negative/positive angle depending on image coordinate direction.
+
+
+======================================================================
+4. CURRENT DETECTION LOGIC
+======================================================================
+
+EYE CLOSURE
+-----------
+
+1. Calculate EAR every frame.
+2. Compare EAR with personalized threshold.
+3. If EAR stays below the threshold long enough, classify as
+   prolonged eye closure/drowsiness.
+4. A normal short blink should not trigger the alarm.
+
+Current prototype configuration:
+
+    Eye closure threshold:
+        personalized from calibration
+
+    Eye closure duration:
+        2.0 seconds
+
+Concept:
+
+    if EAR < threshold:
+        start/continue closure timer
+
+    if closure_time >= 2 seconds:
+        drowsiness event
+
+
+YAWNING
+-------
+
+1. Calculate MAR.
+2. If MAR exceeds the yawn threshold, start/continue a timer.
+3. If it remains above threshold long enough, report a yawn.
+
+Current prototype:
+
+    MAR threshold = 0.42
+    Yawn duration = 1.0 second
+
+
+HEAD TILT
+---------
+
+1. Calculate roll angle from eye centers.
+2. Normalize the angle around 0 degrees.
+3. Compare absolute angle with threshold.
+4. Require the tilt to persist for the configured duration.
+
+Current prototype:
+
+    Tilt threshold = 15 degrees
+    Tilt duration  = 1.5 seconds
+
+Concept:
+
+    if abs(angle) >= 15:
+        start/continue tilt timer
+
+    if tilt_duration >= 1.5 seconds:
+        head tilt event
+
+
+ALARM
+-----
+
+The alarm should not be triggered simply because one frame is
+abnormal.
+
+It should respond to the project's event logic.
+
+Current Alarm API:
+
+    alarm.start()
+
+    alarm.stop()
+
+The alarm runs repeated warning beeps in a background thread.
+
+
+======================================================================
+5. COMPLETE PROJECT WORKFLOW
+======================================================================
+
+START
+  |
+  v
+Open webcam
+  |
+  v
+Initialize MediaPipe Face Landmarker
+  |
+  v
+5-second eye calibration
+  |
+  v
+Calculate natural open-eye EAR baseline
+  |
+  v
+Calculate personalized eye threshold
+  |
+  v
+Start continuous detection
+  |
+  +-----------------------------+
+  |                             |
+  v                             v
+Eye landmarks               Mouth landmarks
+  |                             |
+  v                             v
+EAR calculation              MAR calculation
+  |                             |
+  v                             v
+Eye closure?                 Yawn?
+  |                             |
+  +-------------+---------------+
+                |
+                v
+          Head landmarks
+                |
+                v
+          Head roll angle
+                |
+                v
+          Head tilt?
+                |
+                v
+      Drowsiness/event logic
+                |
+        +-------+-------+
+        |               |
+       NO              YES
+        |               |
+        v               v
+ Continue            Alarm
+ monitoring             |
+                        v
+                  Log/display event
+                        |
+                        v
+                   Continue
+                        |
+                        v
+                 Press Q to exit
+                        |
+                        v
+                 Stop alarm
+                        |
+                        v
+               Release camera
+                        |
+                        v
+                Session summary
+                        |
+                        v
+                       END
+
+
+======================================================================
+6. IMPORTANT CURRENT CONFIGURATION
+======================================================================
+
+Calibration:
+    Duration = 5 seconds
+
+Eye threshold:
+    baseline EAR * 0.70
+
+Eye closure:
+    2.0 seconds
+
+Yawn:
+    MAR threshold = 0.42
+    Duration = 1.0 second
+
+Head tilt:
+    Angle threshold = 15 degrees
+    Duration = 1.5 seconds
+
+Alarm:
+    Windows winsound
+    Frequency = 1000 Hz
+    Beep duration = 500 ms
+    Short pause between beeps = 0.2 seconds
+
+
+======================================================================
+7. TESTING PROCEDURE
+======================================================================
+
+TEST 1 - ENVIRONMENT
+--------------------
+
+Run:
+
+    python verify_Environment.py
+
+Expected:
+
+    [PASS] NumPy
+    [PASS] OpenCV
+    [PASS] MediaPipe
+
+Environment verification previously passed successfully.
+
+
+TEST 2 - CAMERA
+---------------
+
+Run the camera module/test.
+
+Expected:
+- Camera window opens.
+- Face/camera feed is visible.
+- Q exits safely.
+
+
+TEST 3 - FACE/EYE LANDMARKS
+---------------------------
+
+The project successfully displayed facial landmark points.
+
+Expected:
+- Green/visible landmark points during the earlier test.
+- Landmarks should follow the face.
+
+
+TEST 4 - EAR
+------------
+
+The EAR detector was tested successfully.
+
+Observed prototype values included approximately:
+- Closed eyes: around 0.1
+- Open/stretched eyes: around 0.35
+
+These are examples, not fixed universal values.
+
+
+TEST 5 - CALIBRATION
+--------------------
+
+Run:
+
+    python calibration.py
+
+Expected:
+- 5-second calibration
+- Natural open-eye baseline
+- Standard deviation
+- Personalized threshold
+- SUCCESS message
+
+
+TEST 6 - YAWN
+-------------
+
+Run the yawn detector test.
+
+Expected:
+- Normal mouth -> no yawn
+- Sustained large mouth opening -> yawn detected
+
+
+TEST 7 - HEAD POSE
+------------------
+
+Run:
+
+    python head_pose.py
+
+Expected:
+- Straight head -> approximately 0 degrees
+- Small movements -> small angle
+- Sustained tilt > 15 degrees -> head tilt warning
+
+
+TEST 8 - ALARM
+--------------
+
+Run:
+
+    python alarm.py
+
+Expected:
+- Alarm starts
+- Repeated beeps occur
+- Alarm stops after test
+- SUCCESS message
+
+Remember:
+    alarm.start()
+    alarm.stop()
+
+NOT:
+    alarm.trigger()
+
+
+TEST 9 - COMPLETE SYSTEM
+------------------------
+
+Run:
+
+    python main.py
+
+Expected sequence:
+
+1. Eye calibration starts.
+2. Personalized EAR threshold is printed.
+3. Detection starts.
+4. Eye closure/yawn/head tilt are monitored.
+5. Alarm activates when appropriate.
+6. Press Q to stop.
+7. Camera and detectors close safely.
+8. Session summary is displayed.
+
+
+======================================================================
+8. IMPORTANT DEVELOPMENT PROBLEMS THAT WERE FIXED
+======================================================================
+
+PROBLEM 1 - PowerShell execution policy
+---------------------------------------
+
+Error:
+    Activate.ps1 cannot be loaded because running scripts is disabled.
+
+Solution used:
+
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+Then:
+
+    .\venv\Scripts\Activate.ps1
+
+This changes the policy only for the current PowerShell process.
+
+
+PROBLEM 2 - Python 3.13 launcher
+--------------------------------
+
+The system initially had a broken Python 3.13 launcher reference to:
+
+    C:\anaconda\python.exe
+
+Python 3.13 was then installed/available through the Python Install
+Manager and a working Python 3.13 environment was created.
+
+Working environment:
+
+    Python 3.13.15
+
+Virtual environment:
+
+    D:\driverDrowsiness\venv
+
+
+PROBLEM 3 - MediaPipe old API
+-----------------------------
+
+The old code attempted:
+
+    mp.solutions.face_mesh
+
+But the installed MediaPipe version did not provide that interface.
+
+The project was moved to the newer MediaPipe Face Landmarker approach
+using:
+
+    face_landmarker.task
+
+This is now the working approach.
+
+
+PROBLEM 4 - EyeDetector interface mismatch
+-------------------------------------------
+
+Old calibration code used:
+
+    eye_detector.face_detector.detect(frame)
+
+But current EyeDetector uses:
+
+    eye_detector.detect(frame)
+
+The calibration module was corrected to use:
+
+    results = eye_detector.detect(frame)
+
+
+PROBLEM 5 - Alarm interface mismatch
+-------------------------------------
+
+main.py previously called:
+
+    alarm.trigger()
+
+But alarm.py provides:
+
+    alarm.start()
+
+and:
+
+    alarm.stop()
+
+The main system was corrected to use the actual Alarm API.
+
+
+PROBLEM 6 - Head angle reported around 180 degrees
+---------------------------------------------------
+
+The raw atan2 result could represent a straight eye line as approximately
+180 degrees.
+
+The calculation was corrected by normalizing angles greater than 90
+degrees or less than -90 degrees.
+
+Goal:
+
+    Straight head -> approximately 0 degrees
+
+
+======================================================================
+9. IMPORTANT ARCHITECTURE PRINCIPLES
+======================================================================
+
+The project should remain modular.
+
+Recommended conceptual architecture:
+
+                CAMERA
+                   |
+                   v
+          FACE LANDMARKS
+                   |
+        +----------+----------+
+        |          |          |
+        v          v          v
+      EYES       MOUTH      HEAD
+        |          |          |
+        v          v          v
+       EAR        MAR      ROLL ANGLE
+        |          |          |
+        +----------+----------+
+                   |
+                   v
+          DECISION ENGINE
+                   |
+          +--------+--------+
+          |                 |
+          v                 v
+       DISPLAY            ALARM
+
+Each module should have one clear responsibility.
+
+Avoid duplicating:
+- Camera objects
+- Face landmark detectors
+- Detection logic
+
+The current main.py previously showed:
+
+    [INFO] Camera opened successfully.
+    [INFO] Camera opened successfully.
+
+and multiple face landmark detector initializations.
+
+This means the final architecture should eventually be cleaned up so
+one shared camera/landmark pipeline can feed the different feature
+detectors.
+
+This is an important future improvement.
+
+
+======================================================================
+10. FUTURE IMPROVEMENTS
+======================================================================
+
+The current system is a working prototype.
+
+Recommended next improvements:
+
+1. Unified camera and landmark pipeline
+2. Centralized drowsiness decision engine
+3. Multi-factor drowsiness score
+4. Better false-positive handling
+5. Event logging
+6. Session statistics
+7. Subtle camera-window color theme
+8. Dashboard/GUI
+9. Dash-cam/video input support
+10. Testing across multiple users
+11. Threshold tuning using collected data
+12. Performance/FPS measurement
+13. Lighting robustness
+14. Face-loss handling
+15. Multiple-face handling
+16. Evaluation metrics
+17. Documentation and final presentation
+18. SIH/demo-ready UI
+
+
+======================================================================
+11. MULTI-FACTOR DROWSINESS LOGIC - FUTURE DESIGN
+======================================================================
+
+A stronger final system should not depend on only one signal.
+
+Potential signals:
+
+    Eye closure duration
+    Blink frequency
+    EAR trend
+    Yawning frequency
+    MAR duration
+    Head tilt duration
+    Head orientation
+
+Conceptually:
+
+    Drowsiness Score =
+        weighted eye signal
+        + weighted yawn signal
+        + weighted head signal
+
+The exact weights should NOT be invented blindly.
+
+They should be tuned through testing and evaluation data.
+
+The goal is to reduce false alarms.
+
+For example:
+
+    Short blink
+        -> normal
+
+    Long eye closure
+        -> strong drowsiness evidence
+
+    Yawn alone
+        -> warning/evidence
+
+    Head tilt alone
+        -> warning/evidence
+
+    Long eye closure + yawn + abnormal head posture
+        -> strong drowsiness evidence
+
+
+======================================================================
+12. REAL-TIME SYSTEM REQUIREMENTS
+======================================================================
+
+The system should operate continuously.
+
+Important requirements:
+
+- Camera must remain responsive.
+- Detection must be fast enough for real-time use.
+- Alarm must not freeze the camera.
+- Detection should tolerate small landmark fluctuations.
+- Timers should be used instead of single-frame decisions.
+- Face/landmark failure should not crash the application.
+- Q should provide a safe exit.
+- Camera and detector resources should always be released.
+
+
+======================================================================
+13. SAFETY/RESEARCH NOTE
+======================================================================
+
+This is a prototype/research/demo system.
+
+It should NOT be treated as a certified automotive safety system.
+
+A real vehicle deployment would require:
+- Extensive validation
+- Robustness testing
+- Hardware validation
+- Driver studies
+- Environmental testing
+- False-positive/false-negative analysis
+- Safety engineering
+- Regulatory/compliance work
+
+
+======================================================================
+14. QUICK COMMAND REFERENCE
+======================================================================
+
+Activate environment:
+
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+    .\venv\Scripts\Activate.ps1
+
+
+Check Python:
+
+    python --version
+
+
+Check executable:
+
+    python -c "import sys; print(sys.executable)"
+
+
+Environment verification:
+
+    python verify_Environment.py
+
+
+Eye calibration:
+
+    python calibration.py
+
+
+Head pose test:
+
+    python head_pose.py
+
+
+Alarm test:
+
+    python alarm.py
+
+
+Complete system:
+
+    python main.py
+
+
+Exit camera windows:
+
+    Press Q
+
+
+======================================================================
+15. CURRENT PROJECT STATUS
+======================================================================
+
+WORKING:
+    Python environment                 YES
+    NumPy                              YES
+    OpenCV                             YES
+    MediaPipe                          YES
+    Face landmarks                     YES
+    Eye landmarks                      YES
+    EAR                                YES
+    Eye calibration                    YES
+    Personalized threshold             YES
+    Yawn detection                     YES
+    Head tilt detection                YES (after angle normalization)
+    Alarm                              YES
+    Main integration                   YES
+
+CURRENT KNOWN IMPROVEMENTS:
+    Shared camera/landmark architecture
+    Central decision engine
+    Subtle color theme
+    Logging
+    Robustness/evaluation
+    Final dashboard/UI
+
+
+======================================================================
+16. KEY LESSONS FROM DEVELOPMENT
+======================================================================
+
+1. Always check the actual API provided by the installed library.
+2. Do not assume an older MediaPipe interface exists.
+3. Keep module interfaces consistent.
+4. Test each module independently before integrating.
+5. Use time-based conditions instead of single-frame triggers.
+6. Calibrate eye thresholds for the individual user.
+7. Normalize geometric angles before using them for thresholds.
+8. Keep alarm execution separate from the camera loop.
+9. Avoid opening multiple cameras unnecessarily.
+10. Keep configuration values centralized where possible.
+11. Detection thresholds are prototype values and should be evaluated.
+12. A complete drowsiness system should use multiple signals rather
+    than relying on only one measurement.
+
+
+======================================================================
+END OF PROJECT DOCUMENTATION
+======================================================================
